@@ -342,6 +342,7 @@ struct EvdevEv {
 }
 
 #[repr(C)]
+#[derive(Debug)]
 struct AbsInfo {
     // struct input_absinfo, from C.
     value: i32,
@@ -549,6 +550,24 @@ struct Controller {
     name: String,
 }
 
+fn test_bit(input: &[u8], bit: usize) -> bool {
+    let byte = input[bit / 8];
+    (byte & (1 << (bit % 8))) > 0
+}
+
+#[test]
+fn test_bit_test() {
+    let a = [0b0000_0100, 0b0000_0001, 0b0001_0000];
+
+    for i in 0..24 {
+        if i == 2 || i == 8 || i == 20 {
+            assert!(test_bit(&a, i));
+        } else {
+            assert!(!test_bit(&a, i));
+        }
+    }
+}
+
 impl Controller {
     fn new(fd: c_int) -> Self {
         // Enable evdev async.
@@ -561,6 +580,48 @@ impl Controller {
             -1
         );
         let id = unsafe { id.assume_init() }.to_be();
+
+        // From linux/input-event-codes.h
+        const ABS_MAX: usize = 0x3f;
+
+        let mut abs_b = [0_u8; ABS_MAX / 8 + 1];
+        if unsafe {
+            ioctl(
+                fd,
+                // #define EVIOCGBIT(ev,len) _IOC(_IOC_READ, 'E', 0x20 + (ev), len)
+                nix::request_code_read!(b'E', 0x20 + 0x03, abs_b.len()),
+                abs_b.as_mut_ptr().cast(),
+            )
+        } == -1
+        {
+            panic!("EVIOCGBIT failed");
+        }
+
+        println!("{:?}", abs_b);
+
+        for i in 0..ABS_MAX {
+            if test_bit(&abs_b, i) {
+                let mut a = MaybeUninit::<AbsInfo>::uninit();
+                if unsafe {
+                    ioctl(
+                        fd,
+                        // #define EVIOCGABS(abs) _IOR('E', 0x40 + (abs), struct input_absinfo)
+                        nix::request_code_read!(
+                            b'E',
+                            0x40 + i,
+                            size_of::<AbsInfo>()
+                        ),
+                        a.as_mut_ptr().cast(),
+                    )
+                } == -1
+                {
+                    panic!("EVIOCGABS failed");
+                }
+                let a = unsafe { a.assume_init() };
+
+                println!("{} {:?}", i, a);
+            }
+        }
 
         // Get the min and max absolute values for axis.
         let mut a = MaybeUninit::<AbsInfo>::uninit();
